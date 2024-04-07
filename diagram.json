@@ -1,0 +1,68 @@
+{
+    "version": 1,
+    "author": "Sergio Gasquez Arcos",
+    "editor": "wokwi",
+    "parts": [
+        {
+            "type": "board-esp32-c3-devkitm-1",
+            "id": "esp",
+            "top": 0,
+            "left": 0.67,
+            "attrs": {
+                "builder": "rust-nostd-esp"
+            }
+        },
+        {
+            "type": "wokwi-potentiometer",
+            "id": "pot1",
+            "top": -145.3,
+            "left": -19.4,
+            "attrs": {}
+        }
+    ],
+    "connections": [
+        [
+            "esp:TX",
+            "$serialMonitor:RX",
+            "",
+            []
+        ],
+        [
+            "esp:RX",
+            "$serialMonitor:TX",
+            "",
+            []
+        ],
+        [
+            "esp:5V.1",
+            "pot1:VCC",
+            "red",
+            [
+                "h-42.85",
+                "v-182.7",
+                "h68"
+            ]
+        ],
+        [
+            "esp:0",
+            "pot1:SIG",
+            "green",
+            [
+                "h0"
+            ]
+        ],
+        [
+            "esp:GND.3",
+            "pot1:GND",
+            "black",
+            [
+                "h-23.65",
+                "v-163.5"
+            ]
+        ]
+    ],
+    "serialMonitor": {
+        "display": "terminal"
+    },
+    "dependencies": {}
+}

@@ -1,0 +1,39 @@
+[package]
+name = "rust-deej"
+version = "0.1.0"
+authors = ["ville"]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+esp-backtrace = { version = "0.11.0", features = [
+    "esp32c3",
+    "exception-handler",
+    "panic-handler",
+    "println",
+] }
+esp-hal = { version = "0.16.0", features = [
+    "esp32c3",
+    "interrupt-preemption",
+    "direct-vectoring",
+] }
+esp-println = { version = "0.9.0", features = ["esp32c3"] }
+esp32c3 = { version = "0.21.0", features = ["rt", "critical-section"] }
+
+rtic = { git = 'https://github.com/rtic-rs/rtic', features = [
+    "riscv-esp32c3-backend",
+] }
+
+[profile.dev]
+# Rust debug is too slow. 
+# For debug builds always builds with some optimization
+opt-level = "s"
+
+[profile.release]
+codegen-units = 1        # LLVM can perform better optimizations using a single thread
+debug = 2
+debug-assertions = false
+incremental = false
+# lto = 'fat'
+opt-level = 's'
+overflow-checks = false
