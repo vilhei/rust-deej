@@ -35,7 +35,7 @@ mod app {
 
     use heapless::String;
 
-    use core::fmt::Write;
+    use core::{borrow::BorrowMut, fmt::Write};
 
     #[shared]
     struct Shared {}
@@ -43,10 +43,7 @@ mod app {
     #[local]
     struct Local {
         adc: ADC<'static, ADC1>,
-        pot0: AdcPin<GpioPin<Analog, 0>, ADC1, AdcCalCurve<ADC1>>,
-        pot1: AdcPin<GpioPin<Analog, 1>, ADC1, AdcCalCurve<ADC1>>,
-        pot2: AdcPin<GpioPin<Analog, 2>, ADC1, AdcCalCurve<ADC1>>,
-        pot3: AdcPin<GpioPin<Analog, 3>, ADC1, AdcCalCurve<ADC1>>,
+        pots: [AnyAnalogPin; 4],
         delay: Delay,
         display: Ssd1306<
             I2CInterface<I2C<'static, I2C0>>,
@@ -59,6 +56,32 @@ mod app {
         .font(&FONT_6X10)
         .text_color(BinaryColor::On)
         .build();
+
+    enum AnyAnalogPin {
+        AO(AdcPin<GpioPin<Analog, 0>, ADC1, AdcCalCurve<ADC1>>),
+        A1(AdcPin<GpioPin<Analog, 1>, ADC1, AdcCalCurve<ADC1>>),
+        A2(AdcPin<GpioPin<Analog, 2>, ADC1, AdcCalCurve<ADC1>>),
+        A3(AdcPin<GpioPin<Analog, 3>, ADC1, AdcCalCurve<ADC1>>),
+    }
+
+    impl AnyAnalogPin {
+        fn read(&mut self, adc: &mut ADC<ADC1>) -> u16 {
+            match self {
+                AnyAnalogPin::AO(pin) => {
+                    nb::block!(adc.read(pin)).expect("Failed to read analog input")
+                }
+                AnyAnalogPin::A1(pin) => {
+                    nb::block!(adc.read(pin)).expect("Failed to read analog input")
+                }
+                AnyAnalogPin::A2(pin) => {
+                    nb::block!(adc.read(pin)).expect("Failed to read analog input")
+                }
+                AnyAnalogPin::A3(pin) => {
+                    nb::block!(adc.read(pin)).expect("Failed to read analog input")
+                }
+            }
+        }
+    }
 
     #[init]
     fn init(_: init::Context) -> (Shared, Local) {
@@ -78,7 +101,7 @@ mod app {
         let pot2: AdcPin<GpioPin<Analog, 2>, ADC1, AdcCalCurve<ADC1>> = adc_config
             .enable_pin_with_cal(io.pins.gpio2.into_analog(), Attenuation::Attenuation0dB);
 
-        let pot3: AdcPin<GpioPin<Analog, 3>, ADC1, AdcCalCurve<ADC1>> = adc_config
+        let pot3: AdcPin<_, ADC1, AdcCalCurve<ADC1>> = adc_config
             .enable_pin_with_cal(io.pins.gpio3.into_analog(), Attenuation::Attenuation0dB);
 
         let adc = ADC::new(peripherals.ADC1, adc_config);
@@ -98,30 +121,30 @@ mod app {
         let mut display = Ssd1306::new(interface, DisplaySize128x64, DisplayRotation::Rotate0)
             .into_buffered_graphics_mode();
         display.init().unwrap();
-
         println!("Hello world!");
+        let pots: [AnyAnalogPin; 4] = [
+            AnyAnalogPin::AO(pot0),
+            AnyAnalogPin::A1(pot1),
+            AnyAnalogPin::A2(pot2),
+            AnyAnalogPin::A3(pot3),
+        ];
+
         (
             Shared {},
             Local {
                 adc,
-                pot0,
-                pot1,
-                pot2,
-                pot3,
+                pots,
                 delay,
                 display,
             },
         )
     }
 
-    #[idle ( local=[adc, pot0, pot1, pot2, pot3, delay, display])]
+    #[idle ( local=[adc,pots, delay, display])]
     fn idle(cx: idle::Context) -> ! {
         let idle::LocalResources {
             adc,
-            pot0,
-            pot1,
-            pot2,
-            pot3,
+            pots,
             delay,
             display,
             ..
@@ -133,7 +156,7 @@ mod app {
         loop {
             display.clear(BinaryColor::Off).unwrap();
 
-            let v = nb::block!(adc.read(pot0)).unwrap();
+            let v = pots[0].read(adc);
             let s = scale_analog_input_to_1024(v);
             let s2 = scale_to_range(v, 0, 770, 0, 100);
 
@@ -150,7 +173,7 @@ mod app {
 
             println!("pot0: {} - {} - {}\r", v, s, s2);
 
-            let v = nb::block!(adc.read(pot1)).unwrap();
+            let v = pots[1].read(adc);
             let s = scale_analog_input_to_1024(v);
             let s2 = scale_to_range(v, 0, 770, 0, 100);
             println!("pot1: {} - {} - {}\r", v, s, s2);
@@ -167,10 +190,10 @@ mod app {
             .draw(display)
             .unwrap();
 
-            let v = nb::block!(adc.read(pot2)).unwrap();
+            let v = pots[2].read(adc);
             let s = scale_analog_input_to_1024(v);
             let s2 = scale_to_range(v, 0, 770, 0, 100);
-            println!("pot1: {} - {} - {}\r", v, s, s2);
+            println!("pot2: {} - {} - {}\r", v, s, s2);
 
             s_buf.clear();
             write!(s_buf, "2: {}", s2).expect("Format string failed, probably too small buffer");
@@ -184,10 +207,10 @@ mod app {
             .draw(display)
             .unwrap();
 
-            let v = nb::block!(adc.read(pot3)).unwrap();
+            let v = pots[3].read(adc);
             let s = scale_analog_input_to_1024(v);
             let s2 = scale_to_range(v, 0, 770, 0, 100);
-            println!("pot1: {} - {} - {}\r", v, s, s2);
+            println!("pot3: {} - {} - {}\r", v, s, s2);
 
             s_buf.clear();
             write!(s_buf, "3: {}", s2).expect("Format string failed, probably too small buffer");
