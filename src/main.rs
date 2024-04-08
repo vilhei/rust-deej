@@ -1,14 +1,17 @@
 #![no_std]
 #![no_main]
+#![feature(generic_arg_infer)]
+
+const INPUT_COUNT: usize = 4;
 
 #[rtic::app(device=esp32c3, dispatchers = [FROM_CPU_INTR0])]
 mod app {
-    use crate::{scale_analog_input_to_1024, scale_to_range};
+    use crate::INPUT_COUNT;
     use esp_backtrace as _; // Panic handling
     use esp_hal::{
         adc::{AdcCalCurve, AdcConfig, AdcPin, Attenuation, ADC},
         clock::ClockControl,
-        gpio::{Analog, AnyPin, GpioPin},
+        gpio::{Analog, GpioPin},
         i2c::I2C,
         peripherals::{Peripherals, ADC1, I2C0},
         prelude::*,
@@ -27,6 +30,7 @@ mod app {
         text::{Alignment, Text},
     };
 
+    use rust_deej::{scale_analog_input_to_1024, scale_to_range, AnyAnalogPin, ReadAnalog};
     use ssd1306::{
         mode::BufferedGraphicsMode,
         prelude::{DisplaySize128x64, I2CInterface, *},
@@ -35,7 +39,7 @@ mod app {
 
     use heapless::String;
 
-    use core::{borrow::BorrowMut, fmt::Write};
+    use core::fmt::Write;
 
     #[shared]
     struct Shared {}
@@ -43,7 +47,7 @@ mod app {
     #[local]
     struct Local {
         adc: ADC<'static, ADC1>,
-        pots: [AnyAnalogPin; 4],
+        pots: [AnyAnalogPin; INPUT_COUNT],
         delay: Delay,
         display: Ssd1306<
             I2CInterface<I2C<'static, I2C0>>,
@@ -57,32 +61,6 @@ mod app {
         .text_color(BinaryColor::On)
         .build();
 
-    enum AnyAnalogPin {
-        AO(AdcPin<GpioPin<Analog, 0>, ADC1, AdcCalCurve<ADC1>>),
-        A1(AdcPin<GpioPin<Analog, 1>, ADC1, AdcCalCurve<ADC1>>),
-        A2(AdcPin<GpioPin<Analog, 2>, ADC1, AdcCalCurve<ADC1>>),
-        A3(AdcPin<GpioPin<Analog, 3>, ADC1, AdcCalCurve<ADC1>>),
-    }
-
-    impl AnyAnalogPin {
-        fn read(&mut self, adc: &mut ADC<ADC1>) -> u16 {
-            match self {
-                AnyAnalogPin::AO(pin) => {
-                    nb::block!(adc.read(pin)).expect("Failed to read analog input")
-                }
-                AnyAnalogPin::A1(pin) => {
-                    nb::block!(adc.read(pin)).expect("Failed to read analog input")
-                }
-                AnyAnalogPin::A2(pin) => {
-                    nb::block!(adc.read(pin)).expect("Failed to read analog input")
-                }
-                AnyAnalogPin::A3(pin) => {
-                    nb::block!(adc.read(pin)).expect("Failed to read analog input")
-                }
-            }
-        }
-    }
-
     #[init]
     fn init(_: init::Context) -> (Shared, Local) {
         let peripherals = Peripherals::take();
@@ -91,16 +69,12 @@ mod app {
 
         let mut adc_config = AdcConfig::new();
 
-        // let mut pot_in = adc_config.enable_pin(pot_pin, Attenuation::Attenuation0dB);
         let pot0: AdcPin<GpioPin<Analog, 0>, ADC1, AdcCalCurve<ADC1>> = adc_config
             .enable_pin_with_cal(io.pins.gpio0.into_analog(), Attenuation::Attenuation0dB);
-
         let pot1: AdcPin<GpioPin<Analog, 1>, ADC1, AdcCalCurve<ADC1>> = adc_config
             .enable_pin_with_cal(io.pins.gpio1.into_analog(), Attenuation::Attenuation0dB);
-
         let pot2: AdcPin<GpioPin<Analog, 2>, ADC1, AdcCalCurve<ADC1>> = adc_config
             .enable_pin_with_cal(io.pins.gpio2.into_analog(), Attenuation::Attenuation0dB);
-
         let pot3: AdcPin<_, ADC1, AdcCalCurve<ADC1>> = adc_config
             .enable_pin_with_cal(io.pins.gpio3.into_analog(), Attenuation::Attenuation0dB);
 
@@ -121,12 +95,12 @@ mod app {
         let mut display = Ssd1306::new(interface, DisplaySize128x64, DisplayRotation::Rotate0)
             .into_buffered_graphics_mode();
         display.init().unwrap();
-        println!("Hello world!");
-        let pots: [AnyAnalogPin; 4] = [
-            AnyAnalogPin::AO(pot0),
-            AnyAnalogPin::A1(pot1),
-            AnyAnalogPin::A2(pot2),
-            AnyAnalogPin::A3(pot3),
+
+        let pots = [
+            AnyAnalogPin::from(pot0),
+            AnyAnalogPin::from(pot1),
+            AnyAnalogPin::from(pot2),
+            AnyAnalogPin::from(pot3),
         ];
 
         (
@@ -229,15 +203,4 @@ mod app {
             delay.delay_ms(500u32);
         }
     }
-}
-
-fn scale_analog_input_to_1024(value: u16) -> u16 {
-    scale_to_range(value, 0, 770, 0, 1024)
-}
-
-fn scale_to_range(value: u16, old_min: u16, old_max: u16, new_min: u16, new_max: u16) -> u16 {
-    let old_range = old_max - old_min;
-    let new_range = new_max - new_min;
-    let value = value.min(old_max); // To ensure that the provided value is not larger than original max to prevent overflow
-    ((value as u32 - old_min as u32) * new_range as u32 / old_range as u32 + new_min as u32) as u16
 }

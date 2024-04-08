@@ -27,6 +27,8 @@ rtic = { git = 'https://github.com/rtic-rs/rtic', features = [
 ssd1306 = "0.8.4"
 embedded-graphics = "0.8.1"
 heapless = "0.8.0"
+enum_dispatch = "0.3.13"
+embedded-hal = "0.2.7"
 
 [profile.dev]
 # Rust debug is too slow. 
