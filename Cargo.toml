@@ -24,6 +24,10 @@ rtic = { git = 'https://github.com/rtic-rs/rtic', features = [
     "riscv-esp32c3-backend",
 ] }
 
+ssd1306 = "0.8.4"
+embedded-graphics = "0.8.1"
+heapless = "0.8.0"
+
 [profile.dev]
 # Rust debug is too slow. 
 # For debug builds always builds with some optimization
