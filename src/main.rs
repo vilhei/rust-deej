@@ -13,24 +13,26 @@ mod app {
         clock::ClockControl,
         gpio::{Analog, GpioPin},
         i2c::I2C,
-        peripherals::{Peripherals, ADC1, I2C0},
+        peripherals::{Peripherals, ADC1, I2C0, TIMG0, TIMG1},
         prelude::*,
-        Delay, IO,
+        timer::{Timer0, TimerGroup},
+        Delay, Timer, IO,
     };
     use esp_println::println;
 
     use embedded_graphics::{
         geometry::AnchorPoint,
-        mono_font::{
-            ascii::{FONT_5X8, FONT_6X10, FONT_9X18_BOLD},
-            MonoTextStyle, MonoTextStyleBuilder,
-        },
         pixelcolor::BinaryColor,
         prelude::*,
+        primitives::Rectangle,
         text::{Alignment, Text},
     };
 
-    use rust_deej::{scale_analog_input_to_1024, scale_to_range, AnyAnalogPin, ReadAnalog};
+    use rust_deej::{
+        scale_analog_input_to_1023, scale_to_range, AnyAnalogPin, ReadAnalog,
+        DISPLAY_UPDATE_PERIOD, FILL_RECT_STYLE, MAX_ANALOG_VALUE, OUTER_RECT_STYLE,
+        SERIAL_UPDATE_PERIOD, TEXT_STYLE, TEXT_STYLE_BOLD,
+    };
     use ssd1306::{
         mode::BufferedGraphicsMode,
         prelude::{DisplaySize128x64, I2CInterface, *},
@@ -42,7 +44,9 @@ mod app {
     use core::fmt::Write;
 
     #[shared]
-    struct Shared {}
+    struct Shared {
+        raw_input_values: [u16; INPUT_COUNT],
+    }
 
     #[local]
     struct Local {
@@ -54,12 +58,9 @@ mod app {
             DisplaySize128x64,
             BufferedGraphicsMode<DisplaySize128x64>,
         >,
+        timer0: Timer<Timer0<TIMG0>>,
+        timer1: Timer<Timer0<TIMG1>>,
     }
-
-    const TEXT_STYLE: MonoTextStyle<'static, BinaryColor> = MonoTextStyleBuilder::new()
-        .font(&FONT_6X10)
-        .text_color(BinaryColor::On)
-        .build();
 
     #[init]
     fn init(_: init::Context) -> (Shared, Local) {
@@ -103,104 +104,140 @@ mod app {
             AnyAnalogPin::from(pot3),
         ];
 
+        let timer_group0 = TimerGroup::new(peripherals.TIMG0, &clocks);
+        let mut timer0 = timer_group0.timer0;
+        timer0.listen();
+        timer0.start(DISPLAY_UPDATE_PERIOD.millis());
+
+        let timer_group1 = TimerGroup::new(peripherals.TIMG1, &clocks);
+        let mut timer1 = timer_group1.timer0;
+        timer1.listen();
+        timer1.start(SERIAL_UPDATE_PERIOD.millis());
+
         (
-            Shared {},
+            Shared {
+                raw_input_values: Default::default(),
+            },
             Local {
                 adc,
                 pots,
                 delay,
                 display,
+                timer0,
+                timer1,
             },
         )
     }
 
-    #[idle ( local=[adc,pots, delay, display])]
+    #[idle (shared = [raw_input_values], local=[adc,pots, delay])]
     fn idle(cx: idle::Context) -> ! {
         let idle::LocalResources {
-            adc,
-            pots,
-            delay,
-            display,
-            ..
+            adc, pots, delay, ..
         } = cx.local;
-
-        const BUF_SIZE: usize = 32;
-        let mut s_buf: String<BUF_SIZE> = String::new();
+        let mut raw_input_values = cx.shared.raw_input_values;
 
         loop {
-            display.clear(BinaryColor::Off).unwrap();
-
-            let v = pots[0].read(adc);
-            let s = scale_analog_input_to_1024(v);
-            let s2 = scale_to_range(v, 0, 770, 0, 100);
-
-            s_buf.clear();
-            write!(s_buf, "0: {}", s2).expect("Format string failed, probably too small buffer");
-            Text::with_alignment(
-                &s_buf,
-                display.bounding_box().anchor_point(AnchorPoint::TopLeft) + Point::new(2, 10),
-                TEXT_STYLE,
-                Alignment::Left,
-            )
-            .draw(display)
-            .unwrap();
-
-            println!("pot0: {} - {} - {}\r", v, s, s2);
-
-            let v = pots[1].read(adc);
-            let s = scale_analog_input_to_1024(v);
-            let s2 = scale_to_range(v, 0, 770, 0, 100);
-            println!("pot1: {} - {} - {}\r", v, s, s2);
-
-            s_buf.clear();
-            write!(s_buf, "1: {}", s2).expect("Format string failed, probably too small buffer");
-
-            Text::with_alignment(
-                &s_buf,
-                display.bounding_box().anchor_point(AnchorPoint::TopLeft) + Point::new(2, 22),
-                TEXT_STYLE,
-                Alignment::Left,
-            )
-            .draw(display)
-            .unwrap();
-
-            let v = pots[2].read(adc);
-            let s = scale_analog_input_to_1024(v);
-            let s2 = scale_to_range(v, 0, 770, 0, 100);
-            println!("pot2: {} - {} - {}\r", v, s, s2);
-
-            s_buf.clear();
-            write!(s_buf, "2: {}", s2).expect("Format string failed, probably too small buffer");
-
-            Text::with_alignment(
-                &s_buf,
-                display.bounding_box().anchor_point(AnchorPoint::TopLeft) + Point::new(2, 34),
-                TEXT_STYLE,
-                Alignment::Left,
-            )
-            .draw(display)
-            .unwrap();
-
-            let v = pots[3].read(adc);
-            let s = scale_analog_input_to_1024(v);
-            let s2 = scale_to_range(v, 0, 770, 0, 100);
-            println!("pot3: {} - {} - {}\r", v, s, s2);
-
-            s_buf.clear();
-            write!(s_buf, "3: {}", s2).expect("Format string failed, probably too small buffer");
-
-            Text::with_alignment(
-                &s_buf,
-                display.bounding_box().anchor_point(AnchorPoint::TopLeft) + Point::new(2, 46),
-                TEXT_STYLE,
-                Alignment::Left,
-            )
-            .draw(display)
-            .unwrap();
-
-            display.flush().unwrap();
-
-            delay.delay_ms(500u32);
+            for (idx, input) in pots.iter_mut().enumerate() {
+                let new_val = input.read_multi_sample(adc, 100);
+                raw_input_values.lock(|r| r[idx] = new_val);
+            }
+            delay.delay_ms(50u32);
         }
+    }
+
+    #[task(binds=TG0_T0_LEVEL,shared=[raw_input_values], local = [timer0, display])]
+    fn update_display(mut cx: update_display::Context) {
+        let update_display::LocalResources {
+            display, timer0, ..
+        } = cx.local;
+
+        timer0.clear_interrupt();
+
+        let mut percentages: [u16; INPUT_COUNT] = Default::default();
+
+        cx.shared.raw_input_values.lock(|r| {
+            r.iter().enumerate().for_each(|(idx, val)| {
+                percentages[idx] = scale_to_range(*val, 0, MAX_ANALOG_VALUE, 0, 100)
+            })
+        });
+
+        let line_spacing = 12;
+        let mut s_buf: String<32> = String::new();
+
+        let vol_value_y_offset = 22;
+        let vol_bar_x_offset = 45;
+        let vol_bar_height = 7;
+        let vol_bar_width = 80;
+
+        display.clear(BinaryColor::Off).unwrap();
+
+        Text::with_alignment(
+            "Volume control",
+            display.bounding_box().anchor_point(AnchorPoint::TopCenter) + Point::new(0, 8),
+            TEXT_STYLE_BOLD,
+            Alignment::Center,
+        )
+        .draw(display)
+        .unwrap();
+
+        for (idx, p_val) in percentages.iter().enumerate() {
+            s_buf.clear();
+            write!(s_buf, "{}: {}", idx, p_val).expect("Format string failed, check buffer size");
+
+            Text::with_alignment(
+                &s_buf,
+                display.bounding_box().anchor_point(AnchorPoint::TopLeft)
+                    + Point::new(2, vol_value_y_offset + line_spacing * idx as i32),
+                TEXT_STYLE,
+                Alignment::Left,
+            )
+            .draw(display)
+            .unwrap();
+
+            Rectangle::new(
+                display.bounding_box().anchor_point(AnchorPoint::TopLeft)
+                    + Point::new(
+                        vol_bar_x_offset,
+                        vol_value_y_offset - vol_bar_height + line_spacing * idx as i32,
+                    ),
+                Size::new(vol_bar_width, vol_bar_height as u32),
+            )
+            .into_styled(OUTER_RECT_STYLE)
+            .draw(display)
+            .unwrap();
+
+            let fill_val = scale_to_range(*p_val, 0, 100, 0, vol_bar_width as u16);
+
+            Rectangle::new(
+                display.bounding_box().anchor_point(AnchorPoint::TopLeft)
+                    + Point::new(
+                        vol_bar_x_offset,
+                        vol_value_y_offset - vol_bar_height + line_spacing * idx as i32,
+                    ),
+                Size::new(fill_val as u32, vol_bar_height as u32),
+            )
+            .into_styled(FILL_RECT_STYLE)
+            .draw(display)
+            .unwrap();
+        }
+
+        display.flush().unwrap();
+
+        timer0.start(DISPLAY_UPDATE_PERIOD.millis())
+    }
+
+    #[task(binds=TG1_T0_LEVEL,shared =[raw_input_values], local=[timer1])]
+    fn send_to_serial(mut cx: send_to_serial::Context) {
+        cx.local.timer1.clear_interrupt();
+
+        let mut values: [u16; INPUT_COUNT] = Default::default();
+
+        cx.shared.raw_input_values.lock(|r| {
+            r.iter()
+                .enumerate()
+                .for_each(|(idx, val)| values[idx] = scale_analog_input_to_1023(*val))
+        });
+        println!("{}|{}|{}|{}\r", values[0], values[1], values[2], values[3]);
+        cx.local.timer1.start(SERIAL_UPDATE_PERIOD.millis())
     }
 }

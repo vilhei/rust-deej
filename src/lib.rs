@@ -1,17 +1,51 @@
 #![no_std]
 
+use embedded_graphics::{
+    mono_font::{
+        ascii::{FONT_6X10, FONT_6X12, FONT_8X13},
+        MonoTextStyle, MonoTextStyleBuilder,
+    },
+    pixelcolor::BinaryColor,
+    primitives::{PrimitiveStyle, PrimitiveStyleBuilder},
+};
 use embedded_hal::adc::Channel;
 use enum_dispatch::enum_dispatch;
 use esp_hal::{
     adc::{AdcCalCurve, AdcCalScheme, AdcPin, ADC},
     gpio::{Analog, GpioPin},
-    peripherals::{ADC1, ADC2},
+    peripherals::ADC1,
     prelude::*,
 };
+
+pub const DISPLAY_UPDATE_PERIOD: u32 = 50;
+pub const SERIAL_UPDATE_PERIOD: u32 = 50;
+
+pub const MAX_ANALOG_VALUE: u16 = 750;
+
+pub const TEXT_STYLE: MonoTextStyle<'static, BinaryColor> = MonoTextStyleBuilder::new()
+    .font(&FONT_6X10)
+    .text_color(BinaryColor::On)
+    .build();
+
+pub const TEXT_STYLE_BOLD: MonoTextStyle<'static, BinaryColor> = MonoTextStyleBuilder::new()
+    .font(&FONT_8X13)
+    .text_color(BinaryColor::On)
+    .build();
+
+pub const OUTER_RECT_STYLE: PrimitiveStyle<BinaryColor> = PrimitiveStyleBuilder::new()
+    .stroke_color(BinaryColor::On)
+    .stroke_width(1)
+    .fill_color(BinaryColor::Off)
+    .build();
+
+pub const FILL_RECT_STYLE: PrimitiveStyle<BinaryColor> = PrimitiveStyleBuilder::new()
+    .fill_color(BinaryColor::On)
+    .build();
 
 #[enum_dispatch]
 pub trait ReadAnalog {
     fn read(&mut self, adc: &mut ADC<ADC1>) -> u16;
+    fn read_multi_sample(&mut self, adc: &mut ADC<ADC1>, sample_size: u32) -> u16;
 }
 
 /// Allows storage for all implemented analog pins. Currently **only** supports ADC1 pins.
@@ -34,10 +68,18 @@ where
     fn read(&mut self, adc: &mut ADC<ADC1>) -> u16 {
         nb::block!(adc.read(self)).expect("Failed to read analog value")
     }
+
+    fn read_multi_sample(&mut self, adc: &mut ADC<ADC1>, sample_size: u32) -> u16 {
+        let mut sum = 0u32;
+        for _ in 0..sample_size {
+            sum += nb::block!(adc.read(self)).expect("Failed to read analog value") as u32;
+        }
+        (sum / sample_size) as u16 // adc.read returns u16 so the average of u16 should never be larger than u16 --> no overflow
+    }
 }
 
-pub fn scale_analog_input_to_1024(value: u16) -> u16 {
-    scale_to_range(value, 0, 770, 0, 1024)
+pub fn scale_analog_input_to_1023(value: u16) -> u16 {
+    scale_to_range(value, 0, MAX_ANALOG_VALUE, 0, 1023)
 }
 
 pub fn scale_to_range(value: u16, old_min: u16, old_max: u16, new_min: u16, new_max: u16) -> u16 {
