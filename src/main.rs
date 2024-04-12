@@ -2,50 +2,38 @@
 #![no_main]
 #![feature(generic_arg_infer)]
 
-const INPUT_COUNT: usize = 4;
-
 #[rtic::app(device=esp32c3, dispatchers = [FROM_CPU_INTR0])]
 mod app {
-    use crate::INPUT_COUNT;
+
     use esp_backtrace as _; // Panic handling
     use esp_hal::{
         adc::{AdcCalCurve, AdcConfig, AdcPin, Attenuation, ADC},
         clock::ClockControl,
         gpio::{Analog, GpioPin},
         i2c::I2C,
-        peripherals::{Peripherals, ADC1, I2C0, TIMG0, TIMG1},
+        peripherals::{Peripherals, ADC1, TIMG0, TIMG1},
         prelude::*,
         timer::{Timer0, TimerGroup},
         Delay, Timer, IO,
     };
     use esp_println::println;
 
-    use embedded_graphics::{
-        geometry::AnchorPoint,
-        pixelcolor::BinaryColor,
-        prelude::*,
-        primitives::Rectangle,
-        text::{Alignment, Text},
-    };
-
     use rust_deej::{
-        scale_analog_input_to_1023, scale_to_range, AnyAnalogPin, ReadAnalog,
-        DISPLAY_UPDATE_PERIOD, FILL_RECT_STYLE, MAX_ANALOG_VALUE, OUTER_RECT_STYLE,
-        SERIAL_UPDATE_PERIOD, TEXT_STYLE, TEXT_STYLE_BOLD,
+        globals::{INPUT_COUNT, SERIAL_UPDATE_PERIOD},
+        scale_analog_input_to_100, scale_analog_input_to_1023, AnyAnalogPin, DisplayState,
+        ReadAnalog,
     };
     use ssd1306::{
-        mode::BufferedGraphicsMode,
-        prelude::{DisplaySize128x64, I2CInterface, *},
+        prelude::{DisplaySize128x64, *},
         I2CDisplayInterface, Ssd1306,
     };
-
-    use heapless::String;
-
-    use core::fmt::Write;
 
     #[shared]
     struct Shared {
         raw_input_values: [u16; INPUT_COUNT],
+        display: DisplayState<'static>,
+        display_on_time: u32,
+        timer0: Timer<Timer0<TIMG0>>,
     }
 
     #[local]
@@ -53,12 +41,6 @@ mod app {
         adc: ADC<'static, ADC1>,
         pots: [AnyAnalogPin; INPUT_COUNT],
         delay: Delay,
-        display: Ssd1306<
-            I2CInterface<I2C<'static, I2C0>>,
-            DisplaySize128x64,
-            BufferedGraphicsMode<DisplaySize128x64>,
-        >,
-        timer0: Timer<Timer0<TIMG0>>,
         timer1: Timer<Timer0<TIMG1>>,
     }
 
@@ -104,126 +86,85 @@ mod app {
             AnyAnalogPin::from(pot3),
         ];
 
+        let display_on_time: u32 = 10;
+
         let timer_group0 = TimerGroup::new(peripherals.TIMG0, &clocks);
         let mut timer0 = timer_group0.timer0;
         timer0.listen();
-        timer0.start(DISPLAY_UPDATE_PERIOD.millis());
 
         let timer_group1 = TimerGroup::new(peripherals.TIMG1, &clocks);
         let mut timer1 = timer_group1.timer0;
         timer1.listen();
         timer1.start(SERIAL_UPDATE_PERIOD.millis());
 
+        let mut display_state = DisplayState::new(display);
+        display_state.set_title("Volumes");
+        display_state.ready();
+
         (
             Shared {
                 raw_input_values: Default::default(),
+                display: display_state,
+                display_on_time,
+                timer0,
             },
             Local {
                 adc,
                 pots,
                 delay,
-                display,
-                timer0,
                 timer1,
             },
         )
     }
 
-    #[idle (shared = [raw_input_values], local=[adc,pots, delay])]
+    #[idle (shared = [raw_input_values, display], local=[adc,pots, delay])]
     fn idle(cx: idle::Context) -> ! {
         let idle::LocalResources {
             adc, pots, delay, ..
         } = cx.local;
-        let mut raw_input_values = cx.shared.raw_input_values;
+        let idle::SharedResources {
+            mut raw_input_values,
+            mut display,
+            ..
+        } = cx.shared;
 
+        let mut volumes = [0; INPUT_COUNT];
         loop {
             for (idx, input) in pots.iter_mut().enumerate() {
-                let new_val = input.read_multi_sample(adc, 100);
+                let new_val = input.read_multi_sample(adc, 128);
                 raw_input_values.lock(|r| r[idx] = new_val);
+                volumes[idx] = scale_analog_input_to_100(new_val);
             }
+            let display_changed = display.lock(|d| d.set_volumes(&volumes));
+            match display_changed {
+                rust_deej::DisplayStateChanged::Changed => {
+                    update_display::spawn().unwrap();
+                }
+                rust_deej::DisplayStateChanged::NotChanged => (),
+            };
+
             delay.delay_ms(50u32);
         }
     }
 
-    #[task(binds=TG0_T0_LEVEL,shared=[raw_input_values], local = [timer0, display])]
-    fn update_display(mut cx: update_display::Context) {
-        let update_display::LocalResources {
-            display, timer0, ..
-        } = cx.local;
+    #[task(priority=2, shared=[display, timer0, &display_on_time])]
+    async fn update_display(cx: update_display::Context) {
+        let update_display::SharedResources {
+            mut display,
+            mut timer0,
+            display_on_time,
+            ..
+        } = cx.shared;
 
-        timer0.clear_interrupt();
+        display.lock(|d| d.draw()).unwrap();
 
-        let mut percentages: [u16; INPUT_COUNT] = Default::default();
+        timer0.lock(|t| t.start(display_on_time.secs()));
+    }
 
-        cx.shared.raw_input_values.lock(|r| {
-            r.iter().enumerate().for_each(|(idx, val)| {
-                percentages[idx] = scale_to_range(*val, 0, MAX_ANALOG_VALUE, 0, 100)
-            })
-        });
-
-        let line_spacing = 12;
-        let mut s_buf: String<32> = String::new();
-
-        let vol_value_y_offset = 22;
-        let vol_bar_x_offset = 45;
-        let vol_bar_height = 7;
-        let vol_bar_width = 80;
-
-        display.clear(BinaryColor::Off).unwrap();
-
-        Text::with_alignment(
-            "Volume control",
-            display.bounding_box().anchor_point(AnchorPoint::TopCenter) + Point::new(0, 8),
-            TEXT_STYLE_BOLD,
-            Alignment::Center,
-        )
-        .draw(display)
-        .unwrap();
-
-        for (idx, p_val) in percentages.iter().enumerate() {
-            s_buf.clear();
-            write!(s_buf, "{}: {}", idx, p_val).expect("Format string failed, check buffer size");
-
-            Text::with_alignment(
-                &s_buf,
-                display.bounding_box().anchor_point(AnchorPoint::TopLeft)
-                    + Point::new(2, vol_value_y_offset + line_spacing * idx as i32),
-                TEXT_STYLE,
-                Alignment::Left,
-            )
-            .draw(display)
-            .unwrap();
-
-            Rectangle::new(
-                display.bounding_box().anchor_point(AnchorPoint::TopLeft)
-                    + Point::new(
-                        vol_bar_x_offset,
-                        vol_value_y_offset - vol_bar_height + line_spacing * idx as i32,
-                    ),
-                Size::new(vol_bar_width, vol_bar_height as u32),
-            )
-            .into_styled(OUTER_RECT_STYLE)
-            .draw(display)
-            .unwrap();
-
-            let fill_val = scale_to_range(*p_val, 0, 100, 0, vol_bar_width as u16);
-
-            Rectangle::new(
-                display.bounding_box().anchor_point(AnchorPoint::TopLeft)
-                    + Point::new(
-                        vol_bar_x_offset,
-                        vol_value_y_offset - vol_bar_height + line_spacing * idx as i32,
-                    ),
-                Size::new(fill_val as u32, vol_bar_height as u32),
-            )
-            .into_styled(FILL_RECT_STYLE)
-            .draw(display)
-            .unwrap();
-        }
-
-        display.flush().unwrap();
-
-        timer0.start(DISPLAY_UPDATE_PERIOD.millis())
+    #[task(binds=TG0_T0_LEVEL,shared=[display, timer0] )]
+    fn turn_display_off(mut cx: turn_display_off::Context) {
+        cx.shared.timer0.lock(|t| t.clear_interrupt());
+        cx.shared.display.lock(|d| d.turn_off());
     }
 
     #[task(binds=TG1_T0_LEVEL,shared =[raw_input_values], local=[timer1])]
