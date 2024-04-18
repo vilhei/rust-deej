@@ -7,9 +7,8 @@ mod app {
 
     use esp_backtrace as _; // Panic handling
     use esp_hal::{
-        adc::{AdcCalCurve, AdcConfig, AdcPin, Attenuation, ADC},
+        adc::{AdcConfig, Attenuation, ADC},
         clock::ClockControl,
-        gpio::{Analog, GpioPin},
         i2c::I2C,
         peripherals::{Peripherals, ADC1, TIMG0, TIMG1},
         prelude::*,
@@ -21,7 +20,7 @@ mod app {
     use rust_deej::{
         globals::{INPUT_COUNT, SERIAL_UPDATE_PERIOD},
         scale_analog_input_to_100, scale_analog_input_to_1023, AnyAnalogPin, DisplayState,
-        ReadAnalog,
+        DisplayStatus, ReadAnalog,
     };
     use ssd1306::{
         prelude::{DisplaySize128x64, *},
@@ -52,13 +51,13 @@ mod app {
 
         let mut adc_config = AdcConfig::new();
 
-        let pot0: AdcPin<GpioPin<Analog, 0>, ADC1, AdcCalCurve<ADC1>> = adc_config
+        let pot0 = adc_config
             .enable_pin_with_cal(io.pins.gpio0.into_analog(), Attenuation::Attenuation0dB);
-        let pot1: AdcPin<GpioPin<Analog, 1>, ADC1, AdcCalCurve<ADC1>> = adc_config
+        let pot1 = adc_config
             .enable_pin_with_cal(io.pins.gpio1.into_analog(), Attenuation::Attenuation0dB);
-        let pot2: AdcPin<GpioPin<Analog, 2>, ADC1, AdcCalCurve<ADC1>> = adc_config
+        let pot2 = adc_config
             .enable_pin_with_cal(io.pins.gpio2.into_analog(), Attenuation::Attenuation0dB);
-        let pot3: AdcPin<_, ADC1, AdcCalCurve<ADC1>> = adc_config
+        let pot3 = adc_config
             .enable_pin_with_cal(io.pins.gpio3.into_analog(), Attenuation::Attenuation0dB);
 
         let adc = ADC::new(peripherals.ADC1, adc_config);
@@ -122,6 +121,7 @@ mod app {
         let idle::LocalResources {
             adc, pots, delay, ..
         } = cx.local;
+
         let idle::SharedResources {
             mut raw_input_values,
             mut display,
@@ -135,12 +135,11 @@ mod app {
                 raw_input_values.lock(|r| r[idx] = new_val);
                 volumes[idx] = scale_analog_input_to_100(new_val);
             }
+
             let display_changed = display.lock(|d| d.set_volumes(&volumes));
             match display_changed {
-                rust_deej::DisplayStateChanged::Changed => {
-                    update_display::spawn().unwrap();
-                }
-                rust_deej::DisplayStateChanged::NotChanged => (),
+                DisplayStatus::Changed => update_display::spawn().unwrap(),
+                DisplayStatus::NotChanged => (),
             };
 
             delay.delay_ms(50u32);
@@ -157,7 +156,6 @@ mod app {
         } = cx.shared;
 
         display.lock(|d| d.draw()).unwrap();
-
         timer0.lock(|t| t.start(display_on_time.secs()));
     }
 

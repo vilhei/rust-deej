@@ -11,7 +11,7 @@ use embedded_graphics::{
     primitives::Rectangle,
     text::{Alignment, Text},
 };
-use embedded_hal::adc::Channel;
+use embedded_hal_027::adc::Channe                     l;
 use enum_dispatch::enum_dispatch;
 use esp_hal::{
     adc::{AdcCalCurve, AdcCalScheme, AdcPin, ADC},
@@ -82,7 +82,7 @@ pub fn scale_to_range(value: u16, old_min: u16, old_max: u16, new_min: u16, new_
     ((value as u32 - old_min as u32) * new_range as u32 / old_range as u32 + new_min as u32) as u16
 }
 
-pub enum DisplayStateChanged {
+pub enum DisplayStatus {
     Changed,
     NotChanged,
 }
@@ -144,7 +144,7 @@ impl<'a> DisplayState<'a> {
     }
 
     /// Give volumes in range 0-100
-    pub fn set_volumes(&mut self, volumes: &[u16; INPUT_COUNT]) -> DisplayStateChanged {
+    pub fn set_volumes(&mut self, volumes: &[u16; INPUT_COUNT]) -> DisplayStatus {
         let mut changed = false;
 
         for (idx, vol) in volumes.iter().enumerate() {
@@ -155,16 +155,18 @@ impl<'a> DisplayState<'a> {
         }
 
         if changed {
-            return DisplayStateChanged::Changed;
+            return DisplayStatus::Changed;
         }
-        DisplayStateChanged::NotChanged
+        DisplayStatus::NotChanged
     }
 
+    #[allow(clippy::result_unit_err)]
     pub fn draw(&mut self) -> Result<(), ()> {
         if !self.ready_to_draw {
             return Err(());
         }
-        esp_println::println!("Drawing");
+
+        // esp_println::println!("Drawing");
         self.turn_on();
         self.display.clear(BinaryColor::Off).unwrap(); // TODO propagate error?
 
