@@ -11,7 +11,7 @@ use embedded_graphics::{
     primitives::Rectangle,
     text::{Alignment, Text},
 };
-use embedded_hal_027::adc::Channe                     l;
+use embedded_hal_027::adc::Channel;
 use enum_dispatch::enum_dispatch;
 use esp_hal::{
     adc::{AdcCalCurve, AdcCalScheme, AdcPin, ADC},
@@ -20,7 +20,7 @@ use esp_hal::{
     peripherals::{ADC1, I2C0},
     prelude::*,
 };
-use globals::{INPUT_COUNT, MAX_ANALOG_VALUE};
+use globals::{INPUT_COUNT, MAX_ANALOG_VALUE, ZERO_CUTOFF};
 use heapless::String;
 use ssd1306::{mode::BufferedGraphicsMode, prelude::*, Ssd1306};
 use style::{FILL_RECT_STYLE, OUTER_RECT_STYLE, TEXT_STYLE, TEXT_STYLE_BOLD};
@@ -55,13 +55,19 @@ where
     Cal: AdcCalScheme<ADC1>,
 {
     fn read(&mut self, adc: &mut ADC<ADC1>) -> u16 {
-        nb::block!(adc.read(self)).expect("Failed to read analog value")
+        match nb::block!(adc.read(self)).expect("Failed to read analog value") {
+            x if x < ZERO_CUTOFF => 0,
+            x => x,
+        }
     }
 
     fn read_multi_sample(&mut self, adc: &mut ADC<ADC1>, sample_size: u32) -> u16 {
         let mut sum = 0u32;
         for _ in 0..sample_size {
-            sum += nb::block!(adc.read(self)).expect("Failed to read analog value") as u32;
+            sum += match nb::block!(adc.read(self)).expect("Failed to read analog value") {
+                x if x < ZERO_CUTOFF => 0u32,
+                x => x as u32,
+            };
         }
         (sum / sample_size) as u16 // adc.read returns u16 so the average of u16 should never be larger than u16 --> no overflow
     }
@@ -79,6 +85,7 @@ pub fn scale_to_range(value: u16, old_min: u16, old_max: u16, new_min: u16, new_
     let old_range = old_max - old_min;
     let new_range = new_max - new_min;
     let value = value.min(old_max); // To ensure that the provided value is not larger than original max to prevent overflow
+
     ((value as u32 - old_min as u32) * new_range as u32 / old_range as u32 + new_min as u32) as u16
 }
 

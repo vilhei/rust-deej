@@ -159,6 +159,7 @@ mod app {
         timer0.lock(|t| t.start(display_on_time.secs()));
     }
 
+    /// Turn the display off after the timer has expired
     #[task(binds=TG0_T0_LEVEL,shared=[display, timer0] )]
     fn turn_display_off(mut cx: turn_display_off::Context) {
         cx.shared.timer0.lock(|t| t.clear_interrupt());
